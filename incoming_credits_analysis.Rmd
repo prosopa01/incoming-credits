@@ -1,0 +1,363 @@
+---
+title: 'DSA 8670 - Incoming Credits'
+author: "Alison, Robin, & Patrick"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+  word_document:
+    toc: yes
+    toc_depth: 3
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+---
+
+# Situation Summary
+
+New undergraduate students at Clemson University can be awarded incoming credit toward their degree requirements from qualifying AP/IB test scores, or by transfer credit from equivalent courses at another institution. Enrollment growth, revised general education requirements, and increased AP/IB and transfer credits for new students have changed how Clemson plans for courses and sections, particularly for general education courses.  
+
+## Project Brief
+
+Enrollment Management is interested in how incoming credits for **new first-year** students have changed in recent years; which courses students receive credit for; how and from where students receive credit (AP or transfer); and student attributes associated with different levels of incoming credit. 
+
+## Questions of Interest
+
+Specifically:
+
+1. How has new first-year students’ incoming credit changed in recent years?  How are students receiving credit (AP/transfer)? 
+2. Which Clemson courses do new students receive credit for, and do these meet general education requirements?
+
+By performing this research project, **Enrollment Management stands to benefit by** understanding the answers to these and other questions:
+
+1. What types of students have more/less incoming credit?  E.g., majors, residency, high school type, etc.
+2. How should we incorporate patterns of incoming credits into planning for courses/sections/seats in future terms?
+3. Some incoming credits count as prerequisites for Clemson courses. Do AP/IB or transfer credits prepare a student to be successful in the Clemson course?
+
+# Import datasets and Load packages
+
+We received 7 .csv files from the client.
+
+```{r}
+sch.code.attributes <- read.csv('Data/School Code Attr.csv', header = T)
+college.codes <- read.csv('Data/College Code and Description.csv', header = T)
+major.codes <- read.csv('Data/Major Codes and Descriptions.csv', header = T)
+gen.ed.attributes <- read.csv('Data/CourseGenEdAttributes.csv', header = T)
+graduated.students <- read.csv('Data/Graduated students.csv', header = T)
+student.attributes <- read.csv('Data/Incoming credits student attr.csv', header = T)
+incoming.credits <- read.csv('Data/Incoming credits.csv', header = T)
+```
+
+Below, we load the packages that are used for this project.
+
+```{r message = F}
+library(dplyr)
+library(tidyr)
+```
+
+# Understanding the Individual Data Files
+
+In the following sections, each of the seven data files is described and any issues or concerns associated with the data frame are noted.
+
+## School Code Attributes
+
+School code attributes file is 46,131 x 6. All 6 variables were converted to factors. Note that SBGI_CODE can be a high school code or a transferring institution code. State codes could be of interest. Lots of missing data. There are 54,961 NAs in this file.
+
+```{r}
+sum(is.na(sch.code.attributes))
+sch.code.attributes[sch.code.attributes == ""] <- NA
+
+# Changed variable names
+names(sch.code.attributes) <- c("inst.code","inst.city","inst.state",
+                                "inst.county","inst.zip","inst.nation")
+
+# Change variables to factors
+
+fact.vars <- names(sch.code.attributes)
+
+sch.code.attributes[fact.vars] <- lapply(sch.code.attributes[fact.vars], factor)
+
+str(sch.code.attributes)
+```
+
+## College Codes
+
+The college codes file is 20 x 2. There are no missing values. It appears that the college codes file includes a label for every value of STVCOLL_CODE. STVCOLL_CODE includes letters (A - H) and numbers. However, some of the label descriptions in STVCOLL_DESC overlap. For example, 3 = Business and Behavioral Science, C = Behavioral, Social, and Health Science, and D = Business. As another example, 5 = Health, Education, and Human Development, 8 = Health, Education, and Human Development, E = Education, 7 = Eugene T. Moore School of Education, and C = Behavioral, Social, and Health Science.
+
+```{r}
+dim(college.codes)
+sum(is.na(college.codes))
+college.codes
+```
+
+## Major Codes
+
+This data frame is 799 x 2. There is one row with NAs...Row # 717. Because this row had no data, the row was omitted. The clean major codes data frame is 798 x 2.
+
+```{r}
+str(major.codes)
+sum(is.na(major.codes))
+
+which(is.na(major.codes))
+
+major.codes <- major.codes[complete.cases(major.codes),]
+
+dim(major.codes)
+```
+
+## General Education Attributes
+
+The general education attributes is 415 x 4. There are no missing values. The data frame contains Clemson course subject codes (ITAL, PSYC, GEOL) as well as course numbers (e.g., 1010, 1030, 3010).
+
+-   132 courses are at the 1000-level.
+-   112 courses are at the 2000-level.
+-   121 courses are at the 3000-level.
+-   50 courses are at the 4000-level.
+
+General education code (GenEd.Code) represents the type of general education requirement that a specific course satisfies. For example, ITAL 3020 satisfies an Arts & Humanities Literature (LIT) requirement.
+
+```{r}
+str(gen.ed.attributes)
+sum(is.na(gen.ed.attributes))
+
+table(gen.ed.attributes$Course.Subj.Code)
+
+nrow(subset(gen.ed.attributes, Course.Number < 2000))
+nrow(subset(gen.ed.attributes, Course.Number > 1999 & Course.Number < 3000))
+nrow(subset(gen.ed.attributes, Course.Number > 2999 & Course.Number < 4000))
+nrow(subset(gen.ed.attributes, Course.Number > 3999 & Course.Number < 7000))
+```
+
+Here, I create a single variable that concatenates course subject code and course number. Course will be unique and can be joined with the incoming credits file. Course was converted to a factor.
+
+There are some courses that satisfy more than one general education requirement. Kari referred to these as double-dippers. Although most courses satisfy 1 general education requirement, I wanted to keep track of whether a course was a double-dipper (or not). There were 91 courses that would be considered double-dippers. I added a variable called *dbl.dipper* to the data frame where 1 = double dipper and 0 = not double dipper.
+
+```{r}
+gen.ed.attributes$Course <- paste(gen.ed.attributes$Course.Subj.Code, gen.ed.attributes$Course.Number)
+gen.ed.attributes$Course <- factor(gen.ed.attributes$Course)
+
+dd <- gen.ed.attributes %>% group_by(Course) %>% 
+  tally() %>% 
+  filter(n > 1)
+
+nrow(dd)
+
+gen.ed.attributes$dbl.dipper <- gen.ed.attributes$Course %in% dd$Course
+gen.ed.attributes$dbl.dipper <- factor(gen.ed.attributes$dbl.dipper, labels = c("no","yes"))
+```
+
+With two new variables created, the dimensions of the general education attributes file is below.
+
+```{r}
+dim(gen.ed.attributes)
+```
+
+## Graduated Students
+
+There are no missing values in the graduated students data file. Interestingly, the data frame is 13,369 x 3 even though the number of unique students appears to be 13,024.
+
+The graduated students file has a column labeled ID. IDs can have up to 8 numbers. However, some are 6 digits and some are 7 digits. Need to confirm whether leading 0s from the IDs are being dropped. These IDs will be how we join certain files. Thus, we need to ensure that the IDs are correct in this and any other file that contains IDs since we will be merging many files based on the ID.
+
+In addition to ID, there is a column for the term that the student graduated. 
+
+```{r}
+dim(graduated.students)    # 13369 x 3
+
+str(graduated.students)
+sum(is.na(graduated.students))
+
+length(unique(graduated.students$ID))   # 13024
+```
+
+An inspection of the graduation term variable revealed that the data included a student who graduated in 2010. Prior to removing this ID from the data, we should confirm with Kari Buck. If valid, then we can also remove this ID (59367252) from the student attributes and incoming credits files.
+
+```{r}
+table(graduated.students$GRADUATION_TERM)
+
+subset(graduated.students, GRADUATION_TERM == 201001)
+```
+
+## Student Attributes
+
+The student attributes file is 36,659 x 11. It has no missing values. Interestingly, although the data frame has 36,659 rows, the number of unique IDs appears to be 35,649. For some reason, there are 1,010 IDs that are NOT unique.
+
+The student attributes file has a column labeled ID. IDs can have up to 8 numbers. However, some are 6 digits and some are 7 digits. Need to confirm whether leading 0s from the IDs are being dropped. These IDs will be how we join certain files. Thus, we need to ensure that the IDs are correct in this and any other file that contains IDs since we will be merging many files based on the ID.
+
+Some student attributes like Race/Ethnicity may need to be collapsed.
+
+Entry Term spans May 2016 to August 2022.
+
+```{r}
+str(student.attributes)
+sum(is.na(student.attributes))
+
+length(unique(student.attributes$ID))
+
+# Change some variables to factors
+
+fact.vars <- c("ID","Residency","Entry.Status",
+               "Race.Ethn","Class.Code.at.Entry")
+
+student.attributes[fact.vars] <- lapply(student.attributes[fact.vars], factor)
+
+# Reorder levels: FR, SO, JR, SR
+student.attributes$Class.Code.at.Entry <- factor(student.attributes$Class.Code.at.Entry,
+                                                 levels = c("FR","SO","JR","SR"))
+
+# Gender was F, M, vs. N (not reported)
+# replace N with NA so that we do not have 3 levels of Gender
+student.attributes$GENDER_CODE[student.attributes$GENDER_CODE == "N"] <- NA
+student.attributes$GENDER_CODE <- factor(student.attributes$GENDER_CODE)
+
+# Confirm levels of factors
+levels(student.attributes$Residency)      # In-state, Out-of-state
+levels(student.attributes$Entry.Status)   # First-year, Transfer
+levels(student.attributes$GENDER_CODE)    # F vs. M
+levels(student.attributes$Race.Eth)       # Nine levels, may need to collapse some levels
+
+length(unique(student.attributes$ID))
+```
+
+Here, we check the potentially problematic ID (59367252) that we found in the graduated students file who graduated in 201001. As noted in the graduated students file, prior to removing this ID from the data, we should confirm with Kari Buck. It is unusual because the student attributes file shows an entry term of 202005. It seems odd that he graduated in January 2010 and then entered Clemson in Summer of 2020. I wonder if the student was pursuing another bachelor's degree. Looking at their entry major, it seems plausible. Because the degree awarded in 2010 was a BS in Horticulture, and he entered Clemson in Summer 2020 as a BS in Nursing. Their classification at entry was a Senior.
+
+```{r}
+subset(student.attributes, ID == "59367252")
+```
+
+Before moving on to the incoming credits file next, here, I explore what might be going on with the IDs that are not unique. Are the non-unique rows just duplicate rows?
+
+```{r}
+weird.cases <- student.attributes %>% group_by(ID) %>% 
+  tally() %>% 
+  filter(n > 1)
+
+length(unique(weird.cases$ID))
+```
+
+Based on the above, there are appear to be 785 IDs that occur more than once in the student attributes file.
+
+## Incoming Credits
+
+The data frame is 350,624 x 5. There are no missing values. There are 35,698 unique student IDs.
+
+The incoming credits file has a column labeled ID. IDs can have up to 8 numbers. However, some are 6 digits and some are 7 digits. Need to confirm whether leading 0s from the IDs are being dropped. These IDs will be how we join certain files. Thus, we need to ensure that the IDs are correct in this and any other file that contains IDs since we will be merging many files based on the ID.
+
+Course refers to the Clemson course for which the student received credit.
+
+We could order this data file first by ID and then by Course number to get a sense of this data file. For example, each row should correspond to a course transferred in by a student. Thus, a student (ID) can have multiple rows like ID = 27495315.
+
+```{r}
+str(incoming.credits)
+sum(is.na(incoming.credits))
+length(unique(incoming.credits$ID))
+
+# Change some variables to factors
+
+fact.vars <- c("ID","Course","Credit.Source","Entry.Status")
+
+incoming.credits[fact.vars] <- lapply(incoming.credits[fact.vars], factor)
+
+# Confirm levels of factors
+levels(incoming.credits$Credit.Source)  # College Transfer, IB/AP
+levels(incoming.credits$Entry.Status)   # First-year, Transfer
+
+length(unique(incoming.credits$ID))
+```
+
+Here, we check the potentially problematic ID (59367252) that was found in the graduated students file. As noted in the graduated students file and the incoming credits file, prior to removing this ID from the data, we should confirm with Kari Buck. This student appears to have transferred 4 courses and entered as a Senior.
+
+```{r}
+subset(incoming.credits, ID == "59367252")
+```
+
+### Create summarized data of Credit Source
+
+The following code tallies, for each student, the number of courses that are IB/AP and the number of courses that are College Transfer. The data are stored in wide format using the unique student ID. Thus, this summarized data set has 35,698 rows corresponding to each unique student ID.
+
+```{r}
+grp.incoming <- incoming.credits %>% 
+  group_by(ID, Credit.Source) %>% 
+  tally()
+
+source.incoming <- grp.incoming %>% 
+  pivot_wider(id_cols = ID,
+              names_from = Credit.Source,
+              values_from = n)
+
+names(source.incoming)[2:3] <- c("IB.AP", "college.transfer") 
+
+length(unique(source.incoming$ID))
+```
+
+### Create summarized data of Entry Status
+
+Because entry status takes only one unique value for a student, I simply used the `distinct` function in `dpylr` to retain the first row associated with each unique ID. Then, we select only Entry.Status.
+
+```{r}
+entry.incoming <- incoming.credits %>% 
+  distinct(ID, .keep_all=TRUE) %>% 
+  select(ID, Entry.Status)
+
+length(unique(entry.incoming$ID))
+```
+
+Here, we join the two data frames by ID. Whether we use left join or right join, the results will be the same because the unique IDs in each data frame are the same (35,698).
+
+```{r}
+summ.incoming <- left_join(source.incoming, entry.incoming, by = "ID")
+length(unique(summ.incoming$ID))
+```
+
+It turns out that this join was unnecessary because Entry Status is a variable that exists in the student attributes file. I'm a moron.
+
+### Create summarized data about the incoming Courses
+
+Determine how many incoming credits are being transferred in by Subject for each student. I split the letters of the course subject code from the course subject number. Then, after grouping by ID and course letters, we obtained a count of how many courses of a particular Subject were transferred into Clemson. Then, this data was restructured to wide format. There were 110 unique subjects (e.g., CPSC, ENGR, HIST, etc.). One additional variable was created which was simply a count of how many courses a student transferred into Clemson. It was called *number*.
+
+```{r}
+# split Course into 2 columns
+incoming.credits <- incoming.credits %>% 
+  separate(Course, c("course.letters", "course.num"), remove = FALSE)
+
+# count number of courses transferred for each student by subject
+grp.incoming2 <- incoming.credits %>% 
+  group_by(ID, course.letters) %>% 
+  tally()
+
+# long to wide format so that each row is a unique student
+course.letters.incoming <- grp.incoming2 %>% 
+  pivot_wider(id_cols = ID,
+              names_from = course.letters,
+              values_from = n)
+
+# Number of courses a student transferred into Clemson
+course.letters.incoming$number <- apply(course.letters.incoming[,-1], 
+                                        MARGIN = 1, 
+                                        FUN = sum,
+                                        na.rm = T)
+
+```
+
+# Data Joins
+
+The new data frame `source.incoming` and `course.letters.incoming` were joined with the `student.attributes` file by the unique student ID. Note that both `source.incoming` and `course.letters.incoming` had more unique student IDs (viz., 35,698) compared to `student.attributes` (viz., 35,649).
+
+```{r}
+temp <- left_join(source.incoming, course.letters.incoming, by = "ID")
+length(unique(temp$ID))
+```
+
+It is important to highlight that the NAs in `temp` can be replaced with 0. For example, if a student has an NA for ENGL, this does not suggest a missing value. This can be replaced with a 0 because this indicates that this student transferred in 0 ENGL classes. Thus, of the 110 unique Subjects, a student could have many 0s. Similarly, some students transferred in both IB/AP classes and college transfer credit from another college. Thus, these students have a value for both variables. However, there are students who have a value under IB/AP or college transfer credit, but not both. An NA under either variable can be replaced with 0.
+
+```{r}
+temp[is.na(temp)] <- 0
+```
+
+The `temp` file that contains the summarized data was then joined with the student attributes file.
+
+```{r}
+incoming <- left_join(temp, student.attributes, by = "ID")
+length(unique(incoming$ID))
+```
